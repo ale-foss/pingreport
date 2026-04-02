@@ -1,0 +1,29 @@
+# Binaries
+*.exe
+!pingreport.exe
+*.dll
+*.so
+*.dylib
+
+# Test reports (keep test data, not generated reports)
+examples/*_report.html
+
+# Build artifacts
+*.test
+*.out
+bin/
+dist/
+
+# Go workspace file
+go.work
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
