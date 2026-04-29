@@ -1,6 +1,7 @@
 package fileset
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -8,6 +9,9 @@ import (
 	"sort"
 	"strings"
 )
+
+// ErrNoFiles is returned by Discover when the directory contains no PingResult_*.txt files.
+var ErrNoFiles = errors.New("no PingResult_*.txt files found")
 
 // Discover scans dir for files matching PingResult_*.txt and returns their
 // absolute paths sorted in ascending order by the timestamp embedded in the
@@ -31,7 +35,7 @@ func Discover(dir string) ([]string, error) {
 	}
 
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("no PingResult_*.txt files found in %q", dir)
+		return nil, fmt.Errorf("%w in %q", ErrNoFiles, dir)
 	}
 
 	sort.Slice(paths, func(i, j int) bool {

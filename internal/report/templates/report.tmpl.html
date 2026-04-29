@@ -316,7 +316,63 @@
         // Data injected by Go
         const reportData = JSON.parse({{.Data}});
         const maxPoints = {{.MaxPoints}};
-        
+
+        // Baseline timestamp: first second bucket in the recording
+        const t0 = (reportData.timeline && reportData.timeline.ts_sec && reportData.timeline.ts_sec.length > 0)
+            ? reportData.timeline.ts_sec[0]
+            : 0;
+        // Total recording duration in elapsed seconds
+        const totalDuration = (reportData.timeline && reportData.timeline.ts_sec && reportData.timeline.ts_sec.length > 0)
+            ? reportData.timeline.ts_sec[reportData.timeline.ts_sec.length - 1] - t0
+            : 0;
+
+        // Convert raw Unix-epoch seconds array to elapsed seconds (0-based)
+        function toRelSec(tsArr) {
+            return tsArr.map(ts => ts - t0);
+        }
+
+        // Format elapsed seconds as "Xd HH:MM:SS", "HH:MM:SS", or "MM:SS"
+        function formatElapsed(totalSec) {
+            const s = Math.floor(Math.abs(totalSec));
+            const days  = Math.floor(s / 86400);
+            const hours = Math.floor((s % 86400) / 3600);
+            const mins  = Math.floor((s % 3600) / 60);
+            const secs  = s % 60;
+            const hh = String(hours).padStart(2, '0');
+            const mm = String(mins).padStart(2, '0');
+            const ss = String(secs).padStart(2, '0');
+            if (days > 0) return `${days}d ${hh}:${mm}:${ss}`;
+            return `${hh}:${mm}:${ss}`;
+        }
+
+        // Generate evenly-spaced tick values and formatted labels for an elapsed-time axis
+        function elapsedTicks(minSec, maxSec, targetCount) {
+            targetCount = targetCount || 8;
+            const span = maxSec - minSec;
+            if (span <= 0) return { vals: [minSec], texts: [formatElapsed(minSec)] };
+            // Candidate nice intervals (seconds)
+            const candidates = [1, 5, 10, 30, 60, 300, 600, 1800, 3600, 7200, 21600, 43200, 86400];
+            let interval = candidates[candidates.length - 1];
+            for (let i = 0; i < candidates.length; i++) {
+                if (span / candidates[i] <= targetCount) {
+                    interval = candidates[i];
+                    break;
+                }
+            }
+            const start = Math.ceil(minSec / interval) * interval;
+            const vals = [], texts = [];
+            for (let v = start; v <= maxSec + 1e-9; v += interval) {
+                vals.push(v);
+                texts.push(formatElapsed(v));
+            }
+            // Always include 0 label when visible
+            if (minSec <= 0 && (vals.length === 0 || vals[0] > 0)) {
+                vals.unshift(0);
+                texts.unshift(formatElapsed(0));
+            }
+            return { vals, texts };
+        }
+
         // LTTB (Largest Triangle Three Buckets) downsampling algorithm
         function lttb(xData, yData, threshold) {
             if (!xData || !yData || xData.length !== yData.length) {
@@ -378,11 +434,6 @@
                 x: sampled.map(p => p.x),
                 y: sampled.map(p => p.y)
             };
-        }
-        
-        // Convert Unix timestamps to Date objects
-        function timestampsToDate(timestamps) {
-            return timestamps.map(ts => new Date(ts * 1000));
         }
         
         // Filter out NaN/null values from data
@@ -496,7 +547,7 @@
                 return;
             }
             
-            const timestamps = timestampsToDate(reportData.timeline.ts_sec);
+            const timestamps = toRelSec(reportData.timeline.ts_sec);
             const lossData = reportData.timeline.loss_per_sec;
             
             // Aggregate data
@@ -542,9 +593,12 @@
                 title: 'Lost Packets Per Second' + 
                        (aggregated.isAggregated ? 
                         ` (${aggregated.binSizeSeconds}s bins)` : ''),
-                xaxis: { 
-                    title: 'Time',
-                    type: 'date'
+                xaxis: {
+                    title: 'Elapsed Time',
+                    type: 'linear',
+                    tickmode: 'array',
+                    tickvals: elapsedTicks(0, totalDuration).vals,
+                    ticktext: elapsedTicks(0, totalDuration).texts
                 },
                 yaxis: { title: 'Lost Packets' },
                 barmode: 'group',
@@ -595,29 +649,37 @@
                         });
                     }
                     
+                    const resetTicks = elapsedTicks(0, totalDuration);
                     const resetLayout = {
                         title: 'Lost Packets Per Second' + 
                                (aggregated.isAggregated ? 
-                                ` (${aggregated.binSizeSeconds}s bins)` : '')
+                                ` (${aggregated.binSizeSeconds}s bins)` : ''),
+                        xaxis: {
+                            title: 'Elapsed Time',
+                            type: 'linear',
+                            tickmode: 'array',
+                            tickvals: resetTicks.vals,
+                            ticktext: resetTicks.texts
+                        }
                     };
                     
                     Plotly.react(elementId, traces, resetLayout, config);
                     return;
                 }
                 
-                if (eventdata['xaxis.range[0]'] && eventdata['xaxis.range[1]']) {
-                    const start = new Date(eventdata['xaxis.range[0]']).getTime() / 1000;
-                    const end = new Date(eventdata['xaxis.range[1]']).getTime() / 1000;
+                if (eventdata['xaxis.range[0]'] != null && eventdata['xaxis.range[1]'] != null) {
+                    const start = eventdata['xaxis.range[0]'];
+                    const end = eventdata['xaxis.range[1]'];
                     
                     // Filter data to zoom range
                     const filteredIndices = [];
                     for (let i = 0; i < reportData.timeline.ts_sec.length; i++) {
-                        if (reportData.timeline.ts_sec[i] >= start && reportData.timeline.ts_sec[i] <= end) {
+                        if (reportData.timeline.ts_sec[i] - t0 >= start && reportData.timeline.ts_sec[i] - t0 <= end) {
                             filteredIndices.push(i);
                         }
                     }
                     
-                    const zoomedTimestamps = filteredIndices.map(i => timestampsToDate([reportData.timeline.ts_sec[i]])[0]);
+                    const zoomedTimestamps = filteredIndices.map(i => reportData.timeline.ts_sec[i] - t0);
                     const zoomedLossData = filteredIndices.map(i => lossData[i]);
                     
                     // Re-aggregate for zoomed range
@@ -652,12 +714,18 @@
                     }
                     
                     // Update the layout title with new bin size
+                    const zoomTicks = elapsedTicks(start, end);
                     const newLayout = {
                         title: 'Lost Packets Per Second' + 
                                (resampledData.isAggregated ? 
                                 ` (${resampledData.binSizeSeconds}s bins)` : ''),
-                        'xaxis.range[0]': eventdata['xaxis.range[0]'],
-                        'xaxis.range[1]': eventdata['xaxis.range[1]']
+                        xaxis: {
+                            title: 'Elapsed Time',
+                            type: 'linear',
+                            tickmode: 'array',
+                            tickvals: zoomTicks.vals,
+                            ticktext: zoomTicks.texts
+                        }
                     };
                     
                     Plotly.react(elementId, newTraces, newLayout, config);
@@ -674,7 +742,7 @@
                 return;
             }
             
-            const timestamps = timestampsToDate(reportData.timeline.ts_sec);
+            const timestamps = toRelSec(reportData.timeline.ts_sec);
             const meanLatency = reportData.timeline.rtt_mean_per_sec;
             const maxLatency = reportData.timeline.rtt_max_per_sec;
             
@@ -748,9 +816,12 @@
                 title: 'Latency Over Time' + 
                        (aggregated.isAggregated ? 
                         ` (${aggregated.binSizeSeconds}s bins)` : ''),
-                xaxis: { 
-                    title: 'Time',
-                    type: 'date'
+                xaxis: {
+                    title: 'Elapsed Time',
+                    type: 'linear',
+                    tickmode: 'array',
+                    tickvals: elapsedTicks(0, totalDuration).vals,
+                    ticktext: elapsedTicks(0, totalDuration).texts
                 },
                 yaxis: { title: 'Latency (ms)' },
                 barmode: 'group',
@@ -810,25 +881,33 @@
                         });
                     }
                     
+                    const latResetTicks = elapsedTicks(0, totalDuration);
                     const resetLayout = {
                         title: 'Latency Over Time' + 
                                (aggregated.isAggregated ? 
-                                ` (${aggregated.binSizeSeconds}s bins)` : '')
+                                ` (${aggregated.binSizeSeconds}s bins)` : ''),
+                        xaxis: {
+                            title: 'Elapsed Time',
+                            type: 'linear',
+                            tickmode: 'array',
+                            tickvals: latResetTicks.vals,
+                            ticktext: latResetTicks.texts
+                        }
                     };
                     
                     Plotly.react(elementId, traces, resetLayout, config);
                     return;
                 }
                 
-                if (eventdata['xaxis.range[0]'] && eventdata['xaxis.range[1]']) {
-                    const start = new Date(eventdata['xaxis.range[0]']).getTime() / 1000;
-                    const end = new Date(eventdata['xaxis.range[1]']).getTime() / 1000;
+                if (eventdata['xaxis.range[0]'] != null && eventdata['xaxis.range[1]'] != null) {
+                    const start = eventdata['xaxis.range[0]'];
+                    const end = eventdata['xaxis.range[1]'];
                     
                     // Filter data to zoom range
                     const filteredData = { timestamps: [], mean: [], max: [] };
                     for (let i = 0; i < reportData.timeline.ts_sec.length; i++) {
-                        if (reportData.timeline.ts_sec[i] >= start && reportData.timeline.ts_sec[i] <= end) {
-                            const ts = timestampsToDate([reportData.timeline.ts_sec[i]])[0];
+                        if (reportData.timeline.ts_sec[i] - t0 >= start && reportData.timeline.ts_sec[i] - t0 <= end) {
+                            const ts = reportData.timeline.ts_sec[i] - t0;
                             const mean = meanLatency[i];
                             const max = maxLatency[i];
                             
@@ -868,12 +947,18 @@
                     });
                     
                     // Update the layout title with new bin size
+                    const latZoomTicks = elapsedTicks(start, end);
                     const newLayout = {
                         title: 'Latency Over Time' + 
                                (resampledData.isAggregated ? 
                                 ` (${resampledData.binSizeSeconds}s bins)` : ''),
-                        'xaxis.range[0]': eventdata['xaxis.range[0]'],
-                        'xaxis.range[1]': eventdata['xaxis.range[1]']
+                        xaxis: {
+                            title: 'Elapsed Time',
+                            type: 'linear',
+                            tickmode: 'array',
+                            tickvals: latZoomTicks.vals,
+                            ticktext: latZoomTicks.texts
+                        }
                     };
                     
                     Plotly.react(elementId, newTraces, newLayout, config);
@@ -907,7 +992,7 @@
                 return agg;
             }
 
-            const timestamps = timestampsToDate(reportData.timeline.ts_sec);
+            const timestamps = toRelSec(reportData.timeline.ts_sec);
             let aggregated = aggregateStreakData(timestamps, streakData, maxPoints);
 
             function buildTrace(agg) {
@@ -922,12 +1007,23 @@
                 }];
             }
 
-            function buildLayout(agg) {
+            function buildLayout(agg, tickRange) {
+                const tRange = tickRange || [0, totalDuration];
+                const ticks = elapsedTicks(tRange[0], tRange[1]);
                 return {
                     title: 'Consecutive Loss Streak (max per second)' +
                            (agg.isAggregated ? ` (${agg.binSizeSeconds}s bins)` : ''),
-                    xaxis: { title: 'Time', type: 'date' },
-                    yaxis: { title: 'Streak Length (packets)' },
+                    xaxis: {
+                        title: 'Elapsed Time',
+                        type: 'linear',
+                        tickmode: 'array',
+                        tickvals: ticks.vals,
+                        ticktext: ticks.texts
+                    },
+                    yaxis: {
+                        title: 'Streak Length (packets)',
+                        rangemode: 'tozero'
+                    },
                     margin: { l: 60, r: 30, t: 60, b: 60 },
                     hovermode: 'x unified'
                 };
@@ -943,19 +1039,19 @@
                     Plotly.react(elementId, buildTrace(aggregated), buildLayout(aggregated), config);
                     return;
                 }
-                if (eventdata['xaxis.range[0]'] && eventdata['xaxis.range[1]']) {
-                    const start = new Date(eventdata['xaxis.range[0]']).getTime() / 1000;
-                    const end = new Date(eventdata['xaxis.range[1]']).getTime() / 1000;
+                if (eventdata['xaxis.range[0]'] != null && eventdata['xaxis.range[1]'] != null) {
+                    const start = eventdata['xaxis.range[0]'];
+                    const end = eventdata['xaxis.range[1]'];
                     const filteredIndices = [];
                     for (let i = 0; i < reportData.timeline.ts_sec.length; i++) {
-                        if (reportData.timeline.ts_sec[i] >= start && reportData.timeline.ts_sec[i] <= end) {
+                        if (reportData.timeline.ts_sec[i] - t0 >= start && reportData.timeline.ts_sec[i] - t0 <= end) {
                             filteredIndices.push(i);
                         }
                     }
-                    const zTs = filteredIndices.map(i => timestampsToDate([reportData.timeline.ts_sec[i]])[0]);
+                    const zTs = filteredIndices.map(i => reportData.timeline.ts_sec[i] - t0);
                     const zY = filteredIndices.map(i => streakData[i]);
                     const resampled = aggregateStreakData(zTs, zY, maxPoints);
-                    Plotly.react(elementId, buildTrace(resampled), buildLayout(resampled), config);
+                    Plotly.react(elementId, buildTrace(resampled), buildLayout(resampled, [start, end]), config);
                 }
             });
         }
@@ -969,7 +1065,7 @@
                 return;
             }
             
-            const timestamps = timestampsToDate(reportData.timeline.ts_sec);
+            const timestamps = toRelSec(reportData.timeline.ts_sec);
             const sampledData = lttb(timestamps, yData, maxPoints);
             
             const trace = {
@@ -984,9 +1080,12 @@
             
             const layout = {
                 title: title,
-                xaxis: { 
-                    title: 'Time',
-                    type: 'date'
+                xaxis: {
+                    title: 'Elapsed Time',
+                    type: 'linear',
+                    tickmode: 'array',
+                    tickvals: elapsedTicks(0, totalDuration).vals,
+                    ticktext: elapsedTicks(0, totalDuration).texts
                 },
                 yaxis: { title: yLabel },
                 margin: { l: 60, r: 30, t: 60, b: 60 },
@@ -1007,33 +1106,55 @@
                 if (eventdata['xaxis.autorange'] === true) {
                     // Reset to original full data
                     const resetData = lttb(timestamps, yData, maxPoints);
-                    Plotly.restyle(elementId, {
-                        x: [resetData.x],
-                        y: [resetData.y]
-                    });
+                    const resetTicks = elapsedTicks(0, totalDuration);
+                    Plotly.react(elementId, [{
+                        x: resetData.x, y: resetData.y,
+                        type: chartType, name: yLabel,
+                        marker: { color: color },
+                        line: chartType === 'scatter' ? { color: color, width: 2 } : undefined,
+                        mode: chartType === 'scatter' ? 'lines+markers' : undefined
+                    }], {
+                        title: title,
+                        xaxis: { title: 'Elapsed Time', type: 'linear', tickmode: 'array',
+                                 tickvals: resetTicks.vals, ticktext: resetTicks.texts },
+                        yaxis: { title: yLabel },
+                        margin: { l: 60, r: 30, t: 60, b: 60 },
+                        hovermode: 'x unified'
+                    }, config);
                     return;
                 }
                 
-                if (eventdata['xaxis.range[0]'] && eventdata['xaxis.range[1]']) {
-                    const start = new Date(eventdata['xaxis.range[0]']).getTime() / 1000;
-                    const end = new Date(eventdata['xaxis.range[1]']).getTime() / 1000;
+                if (eventdata['xaxis.range[0]'] != null && eventdata['xaxis.range[1]'] != null) {
+                    const start = eventdata['xaxis.range[0]'];
+                    const end = eventdata['xaxis.range[1]'];
                     
                     // Filter data to zoom range
                     const filteredIndices = [];
                     for (let i = 0; i < reportData.timeline.ts_sec.length; i++) {
-                        if (reportData.timeline.ts_sec[i] >= start && reportData.timeline.ts_sec[i] <= end) {
+                        if (reportData.timeline.ts_sec[i] - t0 >= start && reportData.timeline.ts_sec[i] - t0 <= end) {
                             filteredIndices.push(i);
                         }
                     }
                     
-                    const zoomedTimestamps = filteredIndices.map(i => timestampsToDate([reportData.timeline.ts_sec[i]])[0]);
+                    const zoomedTimestamps = filteredIndices.map(i => reportData.timeline.ts_sec[i] - t0);
                     const zoomedYData = filteredIndices.map(i => yData[i]);
                     const resampledData = lttb(zoomedTimestamps, zoomedYData, maxPoints);
+                    const zoomTicks = elapsedTicks(start, end);
                     
-                    Plotly.restyle(elementId, {
-                        x: [resampledData.x],
-                        y: [resampledData.y]
-                    });
+                    Plotly.react(elementId, [{
+                        x: resampledData.x, y: resampledData.y,
+                        type: chartType, name: yLabel,
+                        marker: { color: color },
+                        line: chartType === 'scatter' ? { color: color, width: 2 } : undefined,
+                        mode: chartType === 'scatter' ? 'lines+markers' : undefined
+                    }], {
+                        title: title,
+                        xaxis: { title: 'Elapsed Time', type: 'linear', tickmode: 'array',
+                                 tickvals: zoomTicks.vals, ticktext: zoomTicks.texts },
+                        yaxis: { title: yLabel },
+                        margin: { l: 60, r: 30, t: 60, b: 60 },
+                        hovermode: 'x unified'
+                    }, config);
                 }
             });
         }

@@ -1,10 +1,13 @@
 package main
 
 import (
+"bufio"
+"errors"
 "flag"
 "fmt"
 "os"
 "path/filepath"
+"strings"
 
 "github.com/sqweek/dialog"
 
@@ -48,33 +51,56 @@ fmt.Printf("pingreport version %s\n", version)
 return
 }
 
-// If no folder specified, open a folder dialog
-if config.InputPath == "" {
-fmt.Println("Loading...")
-dirPath, err := promptForDirectory()
-if err != nil {
-fmt.Fprintf(os.Stderr, "Error selecting folder: %v\n", err)
-os.Exit(1)
-}
-config.InputPath = dirPath
-}
+// interactive is true when no -dir flag was given; enables Y/N retry on empty folder
+	interactive := config.InputPath == ""
 
-// Validate folder exists
-info, err := os.Stat(config.InputPath)
-if err != nil || !info.IsDir() {
-fmt.Fprintf(os.Stderr, "Error: %q is not a valid directory\n", config.InputPath)
-os.Exit(1)
-}
+	for {
+		// If no folder specified, open a folder dialog
+		if config.InputPath == "" {
+			fmt.Println("Loading...")
+			dirPath, err := promptForDirectory()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error selecting folder: %v\n", err)
+				os.Exit(1)
+			}
+			config.InputPath = dirPath
+			// Reset output path so it is recomputed for the new folder
+			config.OutputPath = ""
+		}
 
-// Default output: <folder>_report.html next to the folder
-if config.OutputPath == "" {
-config.OutputPath = filepath.Join(
-filepath.Dir(config.InputPath),
-filepath.Base(config.InputPath)+"_report.html",
-)
-}
+		// Validate folder exists
+		info, err := os.Stat(config.InputPath)
+		if err != nil || !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "Error: %q is not a valid directory\n", config.InputPath)
+			os.Exit(1)
+		}
 
-if err := runAnalysis(config); err != nil {
+		// Default output: <folder>_report.html next to the folder
+		if config.OutputPath == "" {
+			config.OutputPath = filepath.Join(
+				filepath.Dir(config.InputPath),
+				filepath.Base(config.InputPath)+"_report.html",
+			)
+		}
+
+		err = runAnalysis(config)
+		if err == nil {
+			break
+		}
+
+		if errors.Is(err, fileset.ErrNoFiles) && interactive {
+			fmt.Printf("Error: %v\n", err)
+			fmt.Print("Select another folder? [Y/N]: ")
+			reader := bufio.NewReader(os.Stdin)
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(answer)
+			if strings.EqualFold(answer, "y") {
+				config.InputPath = ""
+				continue
+			}
+			os.Exit(0)
+		}
+
 fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 os.Exit(1)
 }
