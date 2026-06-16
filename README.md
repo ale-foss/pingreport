@@ -14,7 +14,8 @@ PingReport turns a network test file (PingResult.txt) into a visual report you c
 ---
 
 ## How to use
-1. Double-click `pingreport.exe` (or run it from the command line).
+1. Download the program [pingreport.exe](https://github.com/ale-foss/pingreport/releases/latest)
+2. Locate it on your computer (e.g. in the *Download* folder) and double-click `pingreport.exe` (or run it from the command line).
 2. A folder selection dialog opens — pick the folder containing your `PingResult_*.txt` files.
 3. The report (HTML file) is created next to the selected folder and opens automatically in your default web browser.
 
