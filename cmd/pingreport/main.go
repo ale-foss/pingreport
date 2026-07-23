@@ -75,16 +75,49 @@ return
 			os.Exit(1)
 		}
 
-		// Default output: <folder>_report.html next to the folder
+		// Default output: <folder>_report.html next to the folder.
+		// Falls back to Downloads if the parent directory is not writable (e.g. read-only
+		// corporate OneDrive). If Downloads is also not writable, prompts the user to
+		// pick an output directory.
+		var fallbackMsg string
 		if config.OutputPath == "" {
-			config.OutputPath = filepath.Join(
-				filepath.Dir(config.InputPath),
-				filepath.Base(config.InputPath)+"_report.html",
-			)
+			reportName := filepath.Base(config.InputPath) + "_report.html"
+			defaultOutput := filepath.Join(filepath.Dir(config.InputPath), reportName)
+			switch {
+			case canWriteToDir(filepath.Dir(defaultOutput)):
+				config.OutputPath = defaultOutput
+			case canWriteToDir(downloadsDir()):
+				config.OutputPath = filepath.Join(downloadsDir(), reportName)
+				fallbackMsg = fmt.Sprintf(
+					"The selected folder is read-only.\n\nThe report has been saved to:\n%s",
+					config.OutputPath,
+				)
+			default:
+				dialog.Message(
+					"The selected folder and your Downloads folder are both read-only.\n\nPlease choose a folder where the report can be saved.",
+				).Title("PingReport — Choose Output Location").Info()
+				outDir, dirErr := dialog.Directory().Title("Choose a folder to save the report").Browse()
+				if dirErr != nil {
+					if dirErr == dialog.ErrCancelled {
+						fmt.Println("Output location selection cancelled.")
+						os.Exit(0)
+					}
+					fmt.Fprintf(os.Stderr, "Error selecting output directory: %v\n", dirErr)
+					os.Exit(1)
+				}
+				config.OutputPath = filepath.Join(outDir, reportName)
+				fallbackMsg = fmt.Sprintf(
+					"The report has been saved to:\n%s",
+					config.OutputPath,
+				)
+			}
 		}
 
 		err = runAnalysis(config)
 		if err == nil {
+			if fallbackMsg != "" {
+				dialog.Message("%s", fallbackMsg).Title("PingReport — Report Location").Info()
+			}
 			break
 		}
 
@@ -294,6 +327,30 @@ return fmt.Sprintf("%ds", secs)
 }
 }
 
+
+// canWriteToDir returns true if a file can be created in dir.
+func canWriteToDir(dir string) bool {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return false
+	}
+	tmp, err := os.CreateTemp(dir, "pingreport-probe-*.tmp")
+	if err != nil {
+		return false
+	}
+	tmp.Close()
+	os.Remove(tmp.Name())
+	return true
+}
+
+// downloadsDir returns the path to the user's Downloads folder.
+// Falls back to os.TempDir() if the home directory cannot be determined.
+func downloadsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return os.TempDir()
+	}
+	return filepath.Join(home, "Downloads")
+}
 // showHelp displays usage information
 func showHelp() {
 fmt.Printf(`pingreport v%s - Generate interactive HTML reports from Linux ping logs

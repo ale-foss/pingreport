@@ -11,6 +11,12 @@ build:
 	@go build -o pingreport.exe ./cmd/pingreport
 	@echo "Build complete: pingreport.exe"
 
+# Build the debug executable (dev use only — not for distribution)
+build-debug:
+	@echo "Building pingreport-debug.exe..."
+	@go build -o pingreport-debug.exe ./cmd/pingreport-debug
+	@echo "Build complete: pingreport-debug.exe"
+
 # Run all tests
 test:
 	@echo "Running tests..."
@@ -33,7 +39,7 @@ fmt:
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
-	@rm -f pingreport.exe coverage.out coverage.html
+	@rm -f pingreport.exe pingreport-debug.exe coverage.out coverage.html
 	@echo "Clean complete"
 
 # Download dependencies
@@ -95,6 +101,7 @@ init: deps tidy
 help:
 	@echo "Available targets:"
 	@echo "  build           Build the executable"
+	@echo "  build-debug     Build the debug executable (dev only)"
 	@echo "  test            Run all tests"
 	@echo "  test-coverage   Run tests with coverage report"
 	@echo "  fmt             Format all Go code"
