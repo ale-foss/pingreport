@@ -19,8 +19,13 @@ Current implementation model:
 ```text
 pingreport/
 ├── cmd/pingreport/
-│   └── main.go                      Entry point, flags, pipeline orchestration
+│   └── main.go                      Entry point — calls app.Main(false)
+├── cmd/pingreport-debug/
+│   └── main.go                      Debug entry point — calls app.Main(true)
 ├── internal/
+│   ├── app/
+│   │   ├── app.go                   All pipeline logic, flag parsing, output-path fallback chain
+│   │   └── debug.go                 debugState: buffered/verbose logging, log-file writer
 │   ├── fileset/
 │   │   └── fileset.go              Folder discovery and chained reader
 │   ├── parser/
@@ -73,6 +78,7 @@ Accepted usage:
 .\pingreport.exe C:\captures\session1
 .\pingreport.exe -dir C:\captures\session1 --html session1_report.html
 .\pingreport.exe -dir C:\captures\session1 --csv session1.csv
+.\pingreport.exe -dir C:\captures\session1 --debug
 .\pingreport.exe
 ```
 
@@ -81,20 +87,23 @@ Behavior details:
 - A positional argument, if present, is interpreted as a folder path.
 - If no folder is provided, a Windows folder picker opens.
 - The CLI rejects non-directory input.
-- Default HTML output path is derived in `main.go` as `<parent>/<folder>_report.html`.
-- CSV is only written when `-csv` is provided.
+- Default HTML output path is `<parent>/<folder>_report.html`, computed in `internal/app/app.go`.
+- If that path is not writable (e.g. read-only OneDrive), the output falls back to Downloads, then to a user-picked folder.
+- On any fatal error the console stays open, a diagnostic log is written to Downloads, and the user is told the log path.
+- CSV is only written when `--csv` is provided.
 
 Supported flags:
 
 | Flag | Meaning |
 |---|---|
 | `-dir PATH` | Folder containing `PingResult_*.txt` files |
-| `-html PATH` | Output HTML path |
-| `-csv PATH` | Output CSV path |
-| `-pps FLOAT` | Packets per second used for timestamp interpolation |
-| `-max-points INT` | Maximum chart points before JS-side downsampling |
-| `-h`, `-help` | Show help |
-| `-v`, `-version` | Show version |
+| `--html PATH` | Output HTML path |
+| `--csv PATH` | Output CSV path |
+| `--pps FLOAT` | Packets per second used for timestamp interpolation |
+| `--max-points INT` | Maximum chart points before JS-side downsampling |
+| `--debug` | Verbose diagnostic logging; writes a log file to Downloads |
+| `-h`, `--help` | Show help |
+| `-v`, `--version` | Show version |
 
 ## Input Model
 
@@ -342,8 +351,8 @@ Notes:
 
 ### Add a new CLI flag
 
-1. Extend `Config` in `cmd/pingreport/main.go`.
-2. Register the flag in `parseFlags`.
+1. Extend `Config` in `internal/app/app.go`.
+2. Register the flag in `parseFlags` (same file).
 3. Thread it through `runAnalysis`.
 4. Update help text and both READMEs if the flag is user-facing.
 
@@ -352,7 +361,7 @@ Notes:
 - Do not assume the input is a single ping file.
 - Do not rely on ping summary footer counts to infer additional losses; the parser intentionally avoids that.
 - Do not use raw `float64` JSON marshaling for NaN-bearing fields.
-- Do not assume `report.DetermineOutputPath` represents current CLI output behavior; `main.go` computes the default HTML path itself.
+- Do not assume `report.DetermineOutputPath` represents current CLI output behavior; `internal/app/app.go` computes the default HTML path itself with a fallback chain (default dir → Downloads → folder picker).
 - Do not expect tests, examples, or branding assets to be present in this public snapshot.
 
 ## Debugging Pointers
@@ -377,12 +386,14 @@ If the streak chart looks unexpected:
 
 For a quick codebase pass, read in this order:
 
-1. `cmd/pingreport/main.go`
-2. `internal/fileset/fileset.go`
-3. `internal/parser/parser.go`
-4. `internal/stats/stats.go`
-5. `internal/report/report.go`
-6. `internal/report/templates/report.tmpl.html`
+1. `internal/app/app.go` — all pipeline logic, flag parsing, output-path fallback, error handling
+2. `internal/app/debug.go` — buffered/verbose diagnostic logger
+3. `cmd/pingreport/main.go` — 5-line wrapper (`app.Main(false)`)
+4. `internal/fileset/fileset.go`
+5. `internal/parser/parser.go`
+6. `internal/stats/stats.go`
+7. `internal/report/report.go`
+8. `internal/report/templates/report.tmpl.html`
 
 ## License
 

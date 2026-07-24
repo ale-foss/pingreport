@@ -19,12 +19,19 @@ PingReport turns a network test file (PingResult.txt) into a visual report you c
 2. A folder selection dialog opens — pick the folder containing your `PingResult_*.txt` files.
 3. The report (HTML file) is created next to the selected folder and opens automatically in your default web browser.
 
+> If the folder is on a read-only network drive (e.g. corporate OneDrive), the report is automatically saved to your **Downloads** folder instead, and a dialog tells you the exact path.
+
 > If the browser does not open automatically, open the generated `.html` file manually.
 
 **Command line:**
 ```
 pingreport C:\path\to\folder
 pingreport -dir C:\path\to\folder --html my_report.html --csv data.csv
+```
+
+**Troubleshooting:** if the report is not generated, run with `--debug` to get a detailed log saved to your Downloads folder:
+```
+pingreport C:\path\to\folder --debug
 ```
 
 ---
